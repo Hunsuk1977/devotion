@@ -1,0 +1,79 @@
+name: 묵상 백필 (수동)
+
+# 처음 한 번, 밀려 있는 메일을 따라잡을 때 씁니다.
+# Actions 탭 → 이 워크플로 → "Run workflow" 에서 값을 넣고 실행하세요.
+# Gemini 무료 등급이 하루 20회이므로, 한 번에 다 못 가져오면
+# 다음 날 다시 눌러 이어서 받으시면 됩니다 (이미 있는 날짜는 건너뜁니다).
+
+on:
+  workflow_dispatch:
+    inputs:
+      collection:
+        description: '묵상집 slug (비우면 전체)'
+        required: false
+        default: 'tozer'
+      max:
+        description: '묵상집당 최대 편수'
+        required: false
+        default: '8'
+      since_days:
+        description: '며칠 전까지 훑을지 (비우면 전체 기간)'
+        required: false
+        default: ''
+      budget:
+        description: 'Gemini 호출 한도 (무료 등급은 하루 20회)'
+        required: false
+        default: '18'
+
+concurrency:
+  group: devotion-import
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install google-genai
+
+      - name: 백필
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          IMAP_SERVER: imap.gmail.com
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.6-flash
+          TIMEZONE: America/New_York
+          GEMINI_BUDGET: ${{ inputs.budget }}
+        run: |
+          ARGS="--backfill --max ${{ inputs.max }}"
+          if [ -n "${{ inputs.collection }}" ]; then
+            ARGS="$ARGS --collection ${{ inputs.collection }}"
+          fi
+          if [ -n "${{ inputs.since_days }}" ]; then
+            ARGS="$ARGS --since-days ${{ inputs.since_days }}"
+          fi
+          echo "실행: python importer.py $ARGS"
+          python importer.py $ARGS
+
+      - name: 커밋
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add meditations/
+          if git diff --cached --quiet; then
+            echo "새로 저장된 묵상이 없습니다."
+            exit 0
+          fi
+          git commit -m "묵상 백필 ($(TZ=America/New_York date +%Y-%m-%d))"
+          git pull --rebase --autostash origin "${{ env.GITHUB_REF_NAME }}"
+          git push origin "HEAD:${{ env.GITHUB_REF_NAME }}"
