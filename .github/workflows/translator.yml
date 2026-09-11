@@ -2,8 +2,8 @@ name: Devotion Email Auto Translator
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # 15분마다 실행
-  workflow_dispatch:        # 수동 실행 버튼 제공
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
 
 jobs:
   build-and-run:
@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: '3.11'
 
-       - name: Install Dependencies
+      - name: Install Dependencies
         run: |
           pip install google-generativeai
 
