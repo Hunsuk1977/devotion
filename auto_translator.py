@@ -27,11 +27,11 @@ def decode_mime_words(s):
     return text
 
 def process_with_gemini(subject, body, prompt_template):
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-3.6-flash")  # 모델명 변경
     prompt = prompt_template.format(subject=subject, body=body)
     response = model.generate_content(prompt)
     return response.text
-
+    
 # 프롬프트 정의
 PROMPT_KO = """당신은 묵상 콘텐츠 전담 번역가이자 편집자입니다.
 다음 이메일의 핵심 묵상 본문을 자연스럽고 명확한 한국어 마크다운 문서로 번역해 주세요.
