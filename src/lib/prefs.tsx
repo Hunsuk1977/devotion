@@ -8,6 +8,9 @@ interface Prefs {
   setLang: (l: string) => void;
   theme: Theme;
   setTheme: (t: Theme) => void;
+  /** 마지막으로 보던 묵상집 — "/" 로 들어왔을 때 어디로 보낼지 결정합니다 */
+  collection: string | null;
+  setCollection: (slug: string) => void;
 }
 
 const Ctx = createContext<Prefs | null>(null);
@@ -44,6 +47,7 @@ function initialTheme(): Theme {
 export function PrefsProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState(initialLang);
   const [theme, setThemeState] = useState<Theme>(initialTheme);
+  const [collection, setCollectionState] = useState<string | null>(() => lsGet("devotional.collection"));
 
   useEffect(() => {
     const root = document.documentElement;
@@ -64,8 +68,13 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
         setThemeState(t);
         lsSet("devotional.theme", t);
       },
+      collection,
+      setCollection: (slug) => {
+        setCollectionState(slug);
+        lsSet("devotional.collection", slug);
+      },
     }),
-    [lang, theme],
+    [lang, theme, collection],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

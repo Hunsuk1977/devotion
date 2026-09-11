@@ -4,11 +4,13 @@ import { Header } from "../components/Header";
 import { DevotionalView } from "../components/DevotionalView";
 import { db } from "../lib/data";
 import { isISODate, todayISO } from "../lib/date";
+import { collectionName } from "../lib/content";
 import { LANGUAGES, labelOf, t } from "../i18n";
 import { usePrefs } from "../lib/prefs";
-import type { Devotional, DevotionalMap } from "../types";
+import type { Collection, ContentBundle, Devotional } from "../types";
 
-const blank = (date: string, lang: string): Devotional => ({
+const blank = (collection: string, date: string, lang: string): Devotional => ({
+  collection,
   date,
   lang,
   title: "",
@@ -19,13 +21,14 @@ const blank = (date: string, lang: string): Devotional => ({
   status: "published",
 });
 
-/* ---------------- 로그인 (Supabase 모드) ---------------- */
+/* ---------------- 로그인 ---------------- */
 function SignIn({ onDone, ui }: { onDone: () => void; ui: string }) {
   const isToken = db.authKind === "token";
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -39,6 +42,7 @@ function SignIn({ onDone, ui }: { onDone: () => void; ui: string }) {
       setBusy(false);
     }
   };
+
   return (
     <form className="auth" onSubmit={submit}>
       <h1>{t(ui, "signIn")}</h1>
@@ -67,14 +71,13 @@ export function Admin() {
   const { lang: ui } = usePrefs();
   const [sp, setSp] = useSearchParams();
   const [user, setUser] = useState<string | null | undefined>(undefined);
+  const [cols, setCols] = useState<Collection[]>([]);
 
-  const initDate = isISODate(sp.get("date") ?? undefined) ? sp.get("date")! : todayISO();
-  const initLang = LANGUAGES.some((l) => l.code === sp.get("lang")) ? sp.get("lang")! : ui;
-
-  const [form, setForm] = useState<Devotional>(() => blank(initDate, initLang));
+  const [form, setForm] = useState<Devotional | null>(null);
   const [exists, setExists] = useState(false);
   const [msg, setMsg] = useState<{ text: string; err?: boolean } | null>(null);
   const [recent, setRecent] = useState<Devotional[]>([]);
+  const [filter, setFilter] = useState<string>("");
   const [pane, setPane] = useState<"edit" | "preview">("edit");
   const [otherLangs, setOtherLangs] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -83,32 +86,55 @@ export function Admin() {
     db.currentUser().then(setUser);
   }, []);
 
-  const refreshRecent = useCallback(() => db.list(60).then(setRecent), []);
-  useEffect(() => {
-    if (user) refreshRecent();
-  }, [user, refreshRecent]);
+  const refreshRecent = useCallback(
+    (slug: string) => db.list(slug || null, 80).then(setRecent),
+    [],
+  );
 
-  // 날짜/언어가 바뀌면 기존 항목 로드
   const load = useCallback(
-    async (date: string, lang: string) => {
-      const [d, langs] = await Promise.all([db.get({ date, lang }), db.langsFor(date, true)]);
-      setForm(d ?? blank(date, lang));
+    async (collection: string, date: string, lang: string) => {
+      const [d, langs] = await Promise.all([
+        db.get({ collection, date, lang }),
+        db.langsFor(collection, date, true),
+      ]);
+      setForm(d ?? blank(collection, date, lang));
       setExists(!!d);
       setOtherLangs(langs.filter((l) => l !== lang));
       setMsg(null);
-      setSp({ date, lang }, { replace: true });
+      setSp({ collection, date, lang }, { replace: true });
     },
     [setSp],
   );
+
+  // 로그인 후 최초 1회: 묵상집 목록을 읽고 폼을 채웁니다
   useEffect(() => {
-    if (user) load(initDate, initLang);
+    if (!user) return;
+    let alive = true;
+    (async () => {
+      const list = await db.collections();
+      if (!alive) return;
+      setCols(list);
+      const fallback = (await db.defaultCollection()) || list[0]?.slug || "";
+      const col = list.some((c) => c.slug === sp.get("collection")) ? sp.get("collection")! : fallback;
+      const date = isISODate(sp.get("date") ?? undefined) ? sp.get("date")! : todayISO();
+      const lang = LANGUAGES.some((l) => l.code === sp.get("lang")) ? sp.get("lang")! : ui;
+      if (col) {
+        await load(col, date, lang);
+        refreshRecent("");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  const set = <K extends keyof Devotional>(k: K, v: Devotional[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const set = <K extends keyof Devotional>(k: K, v: Devotional[K]) =>
+    setForm((f) => (f ? { ...f, [k]: v } : f));
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!form) return;
     if (!form.title.trim() || !form.bodyMd.trim()) {
       setMsg({ text: t(ui, "required"), err: true });
       return;
@@ -118,35 +144,40 @@ export function Admin() {
       setForm(saved);
       setExists(true);
       setMsg({ text: t(ui, "saved") });
-      refreshRecent();
+      refreshRecent(filter);
     } catch (ex) {
       setMsg({ text: (ex as Error).message, err: true });
     }
   };
 
   const remove = async () => {
-    if (!confirm(t(ui, "deleteConfirm"))) return;
-    await db.remove({ date: form.date, lang: form.lang });
-    await load(form.date, form.lang);
-    refreshRecent();
+    if (!form || !confirm(t(ui, "deleteConfirm"))) return;
+    await db.remove({ collection: form.collection, date: form.date, lang: form.lang });
+    await load(form.collection, form.date, form.lang);
+    refreshRecent(filter);
   };
 
   const copyFrom = async (lang: string) => {
-    const src = await db.get({ date: form.date, lang });
+    if (!form) return;
+    const src = await db.get({ collection: form.collection, date: form.date, lang });
     if (!src) return;
-    setForm((f) => ({
-      ...f,
-      title: src.title,
-      series: src.series,
-      scriptureRef: src.scriptureRef,
-      scriptureText: src.scriptureText,
-      bodyMd: src.bodyMd,
-    }));
+    setForm((f) =>
+      f
+        ? {
+            ...f,
+            title: src.title,
+            series: src.series,
+            scriptureRef: src.scriptureRef,
+            scriptureText: src.scriptureText,
+            bodyMd: src.bodyMd,
+          }
+        : f,
+    );
   };
 
   const exportJson = async () => {
-    const map = await db.exportAll();
-    const blob = new Blob([JSON.stringify(map, null, 2)], { type: "application/json" });
+    const bundle = await db.exportAll();
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `devotionals-${todayISO()}.json`;
@@ -156,24 +187,41 @@ export function Admin() {
 
   const importJson = async (file: File) => {
     try {
-      const map = JSON.parse(await file.text()) as DevotionalMap;
-      const n = await db.importAll(map);
+      const bundle = JSON.parse(await file.text()) as ContentBundle;
+      const n = await db.importAll(bundle);
       setMsg({ text: `${n}${t(ui, "imported")}` });
-      refreshRecent();
-      load(form.date, form.lang);
+      refreshRecent(filter);
+      if (form) load(form.collection, form.date, form.lang);
     } catch (ex) {
       setMsg({ text: (ex as Error).message, err: true });
     }
   };
 
-  if (user === undefined) return <div className="app"><Header mode="admin" /></div>;
-  if (!user)
+  if (user === undefined) {
+    return (
+      <div className="app">
+        <Header mode="admin" />
+      </div>
+    );
+  }
+  if (!user) {
     return (
       <div className="app">
         <Header mode="admin" />
         <SignIn ui={ui} onDone={() => db.currentUser().then(setUser)} />
       </div>
     );
+  }
+  if (!form) {
+    return (
+      <div className="app">
+        <Header mode="admin" />
+        <main className="admin">
+          <p className="empty">{cols.length ? "…" : t(ui, "noCollections")}</p>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -182,7 +230,7 @@ export function Admin() {
         <div className="admin-head">
           <h1>{t(ui, "adminTitle")}</h1>
           <div className="admin-actions">
-            <button type="button" className="btn" onClick={() => load(todayISO(), form.lang)}>
+            <button type="button" className="btn" onClick={() => load(form.collection, todayISO(), form.lang)}>
               {t(ui, "newEntry")}
             </button>
             <button type="button" className="btn" onClick={exportJson}>
@@ -222,12 +270,31 @@ export function Admin() {
           <form className="form pane" onSubmit={save}>
             <div className="row">
               <div className="field">
+                <label htmlFor="f-collection">{t(ui, "collection")}</label>
+                <select
+                  id="f-collection"
+                  value={form.collection}
+                  onChange={(e) => load(e.target.value, form.date, form.lang)}
+                >
+                  {cols.map((c) => (
+                    <option key={c.slug} value={c.slug}>
+                      {collectionName(c, ui)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
                 <label htmlFor="f-date">{t(ui, "fieldDate")}</label>
-                <input id="f-date" type="date" value={form.date} onChange={(e) => e.target.value && load(e.target.value, form.lang)} />
+                <input
+                  id="f-date"
+                  type="date"
+                  value={form.date}
+                  onChange={(e) => e.target.value && load(form.collection, e.target.value, form.lang)}
+                />
               </div>
               <div className="field">
                 <label htmlFor="f-lang">{t(ui, "fieldLang")}</label>
-                <select id="f-lang" value={form.lang} onChange={(e) => load(form.date, e.target.value)}>
+                <select id="f-lang" value={form.lang} onChange={(e) => load(form.collection, form.date, e.target.value)}>
                   {LANGUAGES.map((l) => (
                     <option key={l.code} value={l.code}>
                       {l.label}
@@ -246,9 +313,7 @@ export function Admin() {
 
             {otherLangs.length > 0 && !exists && (
               <div className="admin-actions">
-                <span className="hint" style={{ fontSize: "0.8125rem", color: "var(--ink-3)" }}>
-                  {t(ui, "copyFrom")}:
-                </span>
+                <span className="hint">{t(ui, "copyFrom")}:</span>
                 {otherLangs.map((l) => (
                   <button key={l} type="button" className="chip" onClick={() => copyFrom(l)}>
                     {labelOf(l)}
@@ -290,7 +355,7 @@ export function Admin() {
               </button>
               {exists && (
                 <>
-                  <Link to={`/${form.lang}/${form.date}`} className="btn">
+                  <Link to={`/${form.collection}/${form.lang}/${form.date}`} className="btn">
                     {t(ui, "openReader")}
                   </Link>
                   <button type="button" className="btn danger" onClick={remove}>
@@ -309,25 +374,47 @@ export function Admin() {
         </div>
 
         <section className="recent">
-          <h2>{t(ui, "recent")}</h2>
+          <div className="recent-head">
+            <h2>{t(ui, "recent")}</h2>
+            <label className="recent-filter">
+              <span className="visually-hidden">{t(ui, "collection")}</span>
+              <select
+                value={filter}
+                onChange={(e) => {
+                  setFilter(e.target.value);
+                  refreshRecent(e.target.value);
+                }}
+              >
+                <option value="">{t(ui, "allCollections")}</option>
+                {cols.map((c) => (
+                  <option key={c.slug} value={c.slug}>
+                    {collectionName(c, ui)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>{t(ui, "fieldDate")}</th>
+                  <th>{t(ui, "collection")}</th>
                   <th>{t(ui, "fieldLang")}</th>
                   <th>{t(ui, "fieldTitle")}</th>
-                  <th>{t(ui, "fieldRef")}</th>
                   <th>{t(ui, "fieldStatus")}</th>
                 </tr>
               </thead>
               <tbody>
                 {recent.map((r) => (
-                  <tr key={`${r.date}/${r.lang}`} onClick={() => load(r.date, r.lang)}>
+                  <tr
+                    key={`${r.collection}/${r.date}/${r.lang}`}
+                    onClick={() => load(r.collection, r.date, r.lang)}
+                  >
                     <td className="date">{r.date}</td>
+                    <td>{collectionName(cols.find((c) => c.slug === r.collection), ui)}</td>
                     <td>{labelOf(r.lang)}</td>
                     <td>{r.title}</td>
-                    <td>{r.scriptureRef}</td>
                     <td>
                       <span className={`tag${r.status === "published" ? " pub" : ""}`}>
                         {t(ui, r.status === "published" ? "statusPublished" : "statusDraft")}

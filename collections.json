@@ -1,0 +1,36 @@
+{
+  "defaultCollection": "tozer",
+  "collections": [
+    {
+      "slug": "tozer",
+      "order": 1,
+      "source": "email",
+      "name": {
+        "ko": "토저의 기독교 리더십",
+        "en": "Tozer on Christian Leadership"
+      },
+      "description": {
+        "ko": "A.W. 토저의 글에서 길어 올린 사역자를 위한 묵상. 매일 아침 이메일로 받아 자동으로 번역합니다.",
+        "en": "Daily reflections for ministers drawn from A.W. Tozer, imported and translated from the morning email."
+      },
+      "importer": {
+        "kind": "email",
+        "search": "(SUBJECT \"Tozer\")",
+        "translate": true
+      }
+    },
+    {
+      "slug": "pastor",
+      "order": 2,
+      "source": "manual",
+      "name": {
+        "ko": "목회자 칼럼",
+        "en": "Pastor's Column"
+      },
+      "description": {
+        "ko": "직접 쓰는 묵상과 주간 칼럼.",
+        "en": "Devotionals and weekly columns written in house."
+      }
+    }
+  ]
+}

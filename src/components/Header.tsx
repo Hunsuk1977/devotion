@@ -36,10 +36,10 @@ export function Header({ mode }: { mode: "reader" | "admin" }) {
   const switchLang = (code: string) => {
     setLang(code);
     if (mode === "reader") {
-      // /ko/2026-09-10 → /en/2026-09-10
+      // /tozer/ko/2026-09-10 → /tozer/en/2026-09-10
       const parts = loc.pathname.split("/");
-      if (parts.length >= 3) {
-        parts[1] = code;
+      if (parts.length >= 4) {
+        parts[2] = code;
         nav(parts.join("/"), { replace: true });
       }
     }

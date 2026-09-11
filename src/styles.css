@@ -179,6 +179,75 @@ textarea {
   background: var(--accent-soft);
 }
 
+/* ---------- 묵상집 전환 ---------- */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.colbar {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.coltabs,
+.colbar-select {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0 1.25rem;
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.coltabs::-webkit-scrollbar {
+  display: none;
+}
+.coltab {
+  position: relative;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 0.875rem;
+  padding: 0.7rem 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.coltab:hover {
+  color: var(--ink);
+}
+.coltab[aria-current="page"] {
+  color: var(--ink);
+  font-weight: 500;
+  border-bottom-color: var(--accent);
+}
+.coldot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-left: 0.4rem;
+  vertical-align: 0.3em;
+}
+.colbar-select {
+  padding-block: 0.5rem;
+}
+.colbar-select select {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 0.35rem 0.6rem;
+  font-size: 0.875rem;
+}
+
 /* ---------- Reader ---------- */
 .reader {
   flex: 1;
@@ -358,8 +427,14 @@ textarea {
   color: var(--ink-2);
   font-family: var(--serif);
 }
+.empty-hint {
+  font-family: var(--sans);
+  font-size: 0.875rem;
+  color: var(--ink-3);
+  margin: 1.5rem 0 0;
+}
 .empty-langs {
-  margin-top: 1rem;
+  margin-top: 0.75rem;
   display: flex;
   gap: 0.5rem;
   justify-content: center;
@@ -502,7 +577,8 @@ textarea {
   font-weight: 500;
   color: var(--ink-2);
 }
-.field .hint {
+.field .hint,
+.hint {
   font-size: 0.75rem;
   color: var(--ink-3);
 }
@@ -594,13 +670,28 @@ textarea {
 .recent {
   margin-top: 2.5rem;
 }
+.recent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+.recent-filter select {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8125rem;
+}
 .recent h2 {
   font-size: 0.8125rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-3);
   font-weight: 500;
-  margin: 0 0 0.5rem;
+  margin: 0;
 }
 .recent table {
   width: 100%;
