@@ -20,9 +20,9 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
+       - name: Install Dependencies
         run: |
-          pip install google-genai
+          pip install google-generativeai
 
       - name: Run Script
         env:
