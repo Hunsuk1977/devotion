@@ -3,13 +3,16 @@ import imaplib
 import email
 from email.header import decode_header
 from datetime import datetime
-from google import genai
+import google.generativeai as genai
 
 # 환경변수 설정
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASS = os.environ.get("EMAIL_PASS")
 IMAP_SERVER = os.environ.get("IMAP_SERVER", "imap.gmail.com")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# Gemini API 키 설정
+genai.configure(api_key=GEMINI_API_KEY)
 
 def decode_mime_words(s):
     if not s:
@@ -24,15 +27,12 @@ def decode_mime_words(s):
     return text
 
 def process_with_gemini(subject, body, prompt_template):
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-2.5-flash")
     prompt = prompt_template.format(subject=subject, body=body)
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt
-    )
+    response = model.generate_content(prompt)
     return response.text
 
-# 프롬프트 정의 (Make와 동일)
+# 프롬프트 정의
 PROMPT_KO = """당신은 묵상 콘텐츠 전담 번역가이자 편집자입니다.
 다음 이메일의 핵심 묵상 본문을 자연스럽고 명확한 한국어 마크다운 문서로 번역해 주세요.
 
@@ -65,7 +65,6 @@ def main():
     mail.login(EMAIL_USER, EMAIL_PASS)
     mail.select("INBOX")
 
-    # 제목에 'Tozer'가 포함된 UNSEEN(읽지 않은) 메일 검색
     status, messages = mail.search(None, '(UNSEEN SUBJECT "Tozer")')
     email_ids = messages[0].split()
 
@@ -82,7 +81,6 @@ def main():
                 msg = email.message_from_bytes(response_part[1])
                 subject = decode_mime_words(msg.get("Subject"))
                 
-                # 이메일 날짜 추출 (YYYY-MM-DD)
                 date_tuple = email.utils.parsedate_tz(msg.get("Date"))
                 if date_tuple:
                     local_date = datetime.fromtimestamp(email.utils.mktime_tz(date_tuple))
@@ -101,12 +99,10 @@ def main():
 
                 print(f"[{date_str}] 메일 처리 중: {subject}")
 
-                # 1. 한국어 번역 수행 및 저장
                 ko_content = process_with_gemini(subject, body, PROMPT_KO)
                 with open(f"meditations/{date_str}.md", "w", encoding="utf-8") as f:
                     f.write(ko_content)
 
-                # 2. 영어 원문 정돈 수행 및 저장
                 en_content = process_with_gemini(subject, body, PROMPT_EN)
                 with open(f"meditations/{date_str}.en.md", "w", encoding="utf-8") as f:
                     f.write(en_content)
