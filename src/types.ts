@@ -18,6 +18,17 @@ export interface Collection {
   count?: number;
 }
 
+/**
+ * 묵상집을 만들거나 고칠 때 관리자 화면이 넘기는 값.
+ * source·importer 같은 나머지 설정은 저장소에 있는 것을 그대로 둡니다.
+ */
+export interface CollectionInput {
+  slug: string;
+  name: Record<LangCode, string>;
+  description?: Record<LangCode, string>;
+  order?: number;
+}
+
 /** 묵상집 × 날짜 × 언어 하나가 글 한 편입니다. */
 export interface Devotional {
   id?: string;
@@ -61,8 +72,16 @@ export interface DataSource {
   /** 관리자 인증 방식: 없음 / 이메일+비밀번호(Supabase) / 토큰(GitHub PAT) */
   readonly authKind: "none" | "password" | "token";
 
+  /** 관리자 화면용: 빈 묵상집을 포함한 전체 목록 */
   collections(): Promise<Collection[]>;
+  /** 독자 화면용: 글이 한 편이라도 게시된 묵상집만 */
+  readerCollections(): Promise<Collection[]>;
   defaultCollection(): Promise<string>;
+
+  /** 묵상집 만들기·이름 고치기. 저장 후의 전체 목록을 돌려줍니다. */
+  saveCollection(input: CollectionInput): Promise<Collection[]>;
+  /** 묵상집 지우기. 글이 남아 있으면 거절합니다. */
+  removeCollection(slug: string): Promise<Collection[]>;
 
   get(key: DevotionalKey): Promise<Devotional | null>;
   /** 해당 묵상집·날짜에 있는 언어 목록 (published만, 관리자에서는 draft 포함) */
