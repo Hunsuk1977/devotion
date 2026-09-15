@@ -1,5 +1,6 @@
 import type {
   Collection,
+  CollectionInput,
   ContentBundle,
   DataSource,
   Devotional,
@@ -47,10 +48,41 @@ abstract class MapStore {
   }
 
   async collections() {
-    return this.cols;
+    return this.cols.map((c) => ({ ...c, count: this.countOf(c.slug) }));
+  }
+  /** 글이 한 편이라도 게시된 묵상집만 — 빈 묵상집은 독자에게 보이지 않습니다 */
+  async readerCollections() {
+    return (await this.collections()).filter((c) => (c.count ?? 0) > 0);
   }
   async defaultCollection() {
     return this.defaultSlug;
+  }
+
+  /** 지금 이 순간의 게시된 글 수 (빌드 시 계산된 count 보다 최신입니다) */
+  protected countOf(slug: string) {
+    return Object.values(this.entries[slug] ?? {}).reduce(
+      (n, byLang) => n + Object.values(byLang).filter((e) => e.status === "published").length,
+      0,
+    );
+  }
+
+  /** 새 묵상집이면 추가하고, 있으면 이름·소개·순서만 바꿉니다 */
+  protected mergeCollection(input: CollectionInput): Collection {
+    const i = this.cols.findIndex((c) => c.slug === input.slug);
+    const next: Collection =
+      i < 0
+        ? { slug: input.slug, source: "manual", order: input.order ?? 500, name: input.name, description: input.description }
+        : { ...this.cols[i], name: input.name, description: input.description, order: input.order ?? this.cols[i].order };
+    if (i < 0) this.cols.push(next);
+    else this.cols[i] = next;
+    this.cols.sort((a, b) => (a.order ?? 500) - (b.order ?? 500) || a.slug.localeCompare(b.slug));
+    return next;
+  }
+
+  /** 글이 남아 있으면 지우지 않습니다 — 먼저 글을 지우게 합니다 */
+  protected assertEmpty(slug: string) {
+    const n = Object.values(this.entries[slug] ?? {}).reduce((m, byLang) => m + Object.keys(byLang).length, 0);
+    if (n > 0) throw new Error(`이 묵상집에는 글이 ${n}편 남아 있습니다. 글을 먼저 지운 뒤 묵상집을 지워 주세요.`);
   }
   async get({ collection, date, lang }: DevotionalKey) {
     return this.entries[collection]?.[date]?.[lang] ?? null;
@@ -144,6 +176,18 @@ class LocalStore extends MapStore implements DataSource {
     this.drop(key);
     this.persist();
   }
+  async saveCollection(input: CollectionInput) {
+    this.mergeCollection(input);
+    this.persist();
+    return this.collections();
+  }
+  async removeCollection(slug: string) {
+    this.assertEmpty(slug);
+    this.cols = this.cols.filter((c) => c.slug !== slug);
+    if (this.defaultSlug === slug) this.defaultSlug = this.cols[0]?.slug ?? "";
+    this.persist();
+    return this.collections();
+  }
   async importAll(bundle: ContentBundle) {
     let n = 0;
     for (const [slug, byDate] of Object.entries(bundle.entries ?? {})) {
@@ -183,11 +227,32 @@ function ghToken(): string | null {
   }
 }
 
+/** 묵상집 목록 파일 (저장소 루트) */
+const GH_CONFIG = "collections.json";
+
+/** collections.json 의 모양. importer 등 우리가 모르는 키도 그대로 보존합니다. */
+type ConfigCollection = Collection & { importer?: unknown; [k: string]: unknown };
+interface ConfigFile {
+  defaultCollection: string;
+  collections: ConfigCollection[];
+}
+
+/** 빌드 때 계산한 count 는 설정 파일에 저장하지 않습니다 */
+function stripCount({ count: _count, ...rest }: Collection): ConfigCollection {
+  return rest as ConfigCollection;
+}
+
 function utf8ToBase64(s: string): string {
   const bytes = new TextEncoder().encode(s);
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin);
+}
+
+function base64ToUtf8(s: string): string {
+  const bin = atob(s.replace(/\s/g, ""));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 class GitHubStore extends MapStore implements DataSource {
@@ -249,6 +314,60 @@ class GitHubStore extends MapStore implements DataSource {
       });
     }
     this.drop(key);
+  }
+
+  /**
+   * 묵상집 목록은 저장소의 collections.json 이 원본입니다.
+   * 저장할 때마다 저장소에서 다시 읽어 합치기 때문에, 이메일 가져오기 설정
+   * (importer) 이나 다른 곳에서 먼저 들어간 변경을 덮어쓰지 않습니다.
+   */
+  private async readConfig(): Promise<{ cfg: ConfigFile; sha: string | null }> {
+    const j = (await this.api(`/contents/${GH_CONFIG}?ref=${GH_BRANCH}`)) as
+      | { content?: string; sha?: string }
+      | null;
+    if (!j?.content) {
+      return { cfg: { defaultCollection: this.defaultSlug, collections: this.cols.map(stripCount) }, sha: null };
+    }
+    const cfg = JSON.parse(base64ToUtf8(j.content)) as ConfigFile;
+    return { cfg: { defaultCollection: cfg.defaultCollection ?? "", collections: cfg.collections ?? [] }, sha: j.sha ?? null };
+  }
+
+  private async writeConfig(cfg: ConfigFile, sha: string | null, message: string) {
+    await this.api(`/contents/${GH_CONFIG}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        message,
+        content: utf8ToBase64(JSON.stringify(cfg, null, 2) + "\n"),
+        branch: GH_BRANCH,
+        ...(sha ? { sha } : {}),
+      }),
+    });
+    this.cols = cfg.collections.map((c) => ({ ...c, source: c.source ?? "manual" }) as Collection);
+    this.cols.sort((a, b) => (a.order ?? 500) - (b.order ?? 500) || a.slug.localeCompare(b.slug));
+    if (cfg.defaultCollection) this.defaultSlug = cfg.defaultCollection;
+  }
+
+  async saveCollection(input: CollectionInput) {
+    const { cfg, sha } = await this.readConfig();
+    const i = cfg.collections.findIndex((c) => c.slug === input.slug);
+    const patch = { name: input.name, description: input.description, order: input.order };
+    if (i < 0) {
+      cfg.collections.push({ slug: input.slug, source: "manual", ...patch, order: input.order ?? 500 });
+    } else {
+      cfg.collections[i] = { ...cfg.collections[i], ...patch, order: input.order ?? cfg.collections[i].order };
+    }
+    if (!cfg.defaultCollection) cfg.defaultCollection = cfg.collections[0]?.slug ?? input.slug;
+    await this.writeConfig(cfg, sha, `collection: ${i < 0 ? "add" : "update"} ${input.slug}`);
+    return this.collections();
+  }
+
+  async removeCollection(slug: string) {
+    this.assertEmpty(slug);
+    const { cfg, sha } = await this.readConfig();
+    cfg.collections = cfg.collections.filter((c) => c.slug !== slug);
+    if (cfg.defaultCollection === slug) cfg.defaultCollection = cfg.collections[0]?.slug ?? "";
+    await this.writeConfig(cfg, sha, `collection: remove ${slug}`);
+    return this.collections();
   }
 
   async importAll(bundle: ContentBundle) {
@@ -361,8 +480,45 @@ class SupabaseStore implements DataSource {
     }));
     return this.colCache;
   }
+  async readerCollections() {
+    const { data, error } = await this.sb.from("devotionals").select("collection").eq("status", "published");
+    if (error) throw error;
+    const counts = new Map<string, number>();
+    for (const r of data ?? []) counts.set(r.collection as string, (counts.get(r.collection as string) ?? 0) + 1);
+    return (await this.collections())
+      .filter((c) => counts.has(c.slug))
+      .map((c) => ({ ...c, count: counts.get(c.slug) }));
+  }
   async defaultCollection() {
     return (await this.collections())[0]?.slug ?? "";
+  }
+  async saveCollection(input: CollectionInput) {
+    const { error } = await this.sb.from("collections").upsert(
+      {
+        slug: input.slug,
+        sort: input.order ?? 500,
+        source: "manual",
+        name: input.name,
+        description: input.description ?? null,
+        enabled: true,
+      },
+      { onConflict: "slug" },
+    );
+    if (error) throw error;
+    this.colCache = null;
+    return this.collections();
+  }
+  async removeCollection(slug: string) {
+    const { count, error: cErr } = await this.sb
+      .from("devotionals")
+      .select("*", { count: "exact", head: true })
+      .eq("collection", slug);
+    if (cErr) throw cErr;
+    if (count) throw new Error(`이 묵상집에는 글이 ${count}편 남아 있습니다. 글을 먼저 지운 뒤 묵상집을 지워 주세요.`);
+    const { error } = await this.sb.from("collections").delete().eq("slug", slug);
+    if (error) throw error;
+    this.colCache = null;
+    return this.collections();
   }
   async get({ collection, date, lang }: DevotionalKey) {
     const { data, error } = await this.sb
