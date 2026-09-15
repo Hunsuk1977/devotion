@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Header } from "../components/Header";
 import { DevotionalView } from "../components/DevotionalView";
+import { CollectionsPane } from "../components/CollectionsPane";
 import { db } from "../lib/data";
 import { isISODate, todayISO } from "../lib/date";
 import { collectionName } from "../lib/content";
@@ -79,6 +80,7 @@ export function Admin() {
   const [recent, setRecent] = useState<Devotional[]>([]);
   const [filter, setFilter] = useState<string>("");
   const [pane, setPane] = useState<"edit" | "preview">("edit");
+  const [section, setSection] = useState<"write" | "collections">("write");
   const [otherLangs, setOtherLangs] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -212,51 +214,18 @@ export function Admin() {
       </div>
     );
   }
-  if (!form) {
-    return (
-      <div className="app">
-        <Header mode="admin" />
-        <main className="admin">
-          <p className="empty">{cols.length ? "…" : t(ui, "noCollections")}</p>
-        </main>
-      </div>
-    );
-  }
 
-  return (
-    <div className="app">
-      <Header mode="admin" />
-      <main className="admin">
-        <div className="admin-head">
-          <h1>{t(ui, "adminTitle")}</h1>
-          <div className="admin-actions">
-            <button type="button" className="btn" onClick={() => load(form.collection, todayISO(), form.lang)}>
-              {t(ui, "newEntry")}
-            </button>
-            <button type="button" className="btn" onClick={exportJson}>
-              {t(ui, "exportJson")}
-            </button>
-            <button type="button" className="btn" onClick={() => fileRef.current?.click()}>
-              {t(ui, "importJson")}
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json"
-              hidden
-              onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])}
-            />
-            {db.authKind !== "none" && (
-              <button type="button" className="btn" onClick={() => db.signOut().then(() => setUser(null))}>
-                {t(ui, "signOut")}
-              </button>
-            )}
-          </div>
-        </div>
+  // 묵상집을 새로 만든 뒤, 바로 그 묵상집에 글을 쓰러 갑니다
+  const writeIn = (slug: string) => {
+    setSection("write");
+    load(slug, form?.date ?? todayISO(), form?.lang ?? ui);
+  };
 
-        {db.mode === "local" && <p className="banner">{t(ui, "localMode")}</p>}
-        {db.mode === "github" && <p className="banner">{t(ui, "githubMode")}</p>}
-
+  // 글 쓰기 화면. 별도 컴포넌트가 아니라 JSX 값이라 입력 도중 포커스를 잃지 않습니다.
+  const writeSection = !form ? (
+    <p className="empty">{cols.length ? "…" : t(ui, "noCollections")}</p>
+  ) : (
+    <>
         <div className="tabs" role="tablist">
           <button type="button" role="tab" aria-selected={pane === "edit"} onClick={() => setPane("edit")}>
             {t(ui, "edit")}
@@ -426,6 +395,64 @@ export function Admin() {
             </table>
           </div>
         </section>
+    </>
+  );
+
+  return (
+    <div className="app">
+      <Header mode="admin" />
+      <main className="admin">
+        <div className="admin-head">
+          <h1>{t(ui, "adminTitle")}</h1>
+          <div className="admin-actions">
+            {form && section === "write" && (
+              <button type="button" className="btn" onClick={() => load(form.collection, todayISO(), form.lang)}>
+                {t(ui, "newEntry")}
+              </button>
+            )}
+            <button type="button" className="btn" onClick={exportJson}>
+              {t(ui, "exportJson")}
+            </button>
+            <button type="button" className="btn" onClick={() => fileRef.current?.click()}>
+              {t(ui, "importJson")}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json"
+              hidden
+              onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])}
+            />
+            {db.authKind !== "none" && (
+              <button type="button" className="btn" onClick={() => db.signOut().then(() => setUser(null))}>
+                {t(ui, "signOut")}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {db.mode === "local" && <p className="banner">{t(ui, "localMode")}</p>}
+        {db.mode === "github" && <p className="banner">{t(ui, "githubMode")}</p>}
+
+        <div className="admin-tabs" role="tablist">
+          <button type="button" role="tab" aria-selected={section === "write"} onClick={() => setSection("write")}>
+            {t(ui, "tabWrite")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={section === "collections"}
+            onClick={() => setSection("collections")}
+          >
+            {t(ui, "tabCollections")}
+          </button>
+        </div>
+
+        {section === "collections" ? (
+          <CollectionsPane ui={ui} cols={cols} onChange={setCols} onWrite={writeIn} />
+        ) : (
+          writeSection
+        )}
       </main>
     </div>
   );
