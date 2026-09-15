@@ -300,14 +300,14 @@ async function main() {
     warnings.push(`meditations/ 바로 아래 md 파일 ${flat.length}개를 '${fallback}' 묵상집으로 넣었습니다. meditations/${fallback}/ 로 옮기는 것을 권합니다.`);
   }
 
-  // 3) 콘텐츠가 하나도 없는 묵상집은 목록에서 빼되, 직접 입력용은 남깁니다
+  // 3) 선언된 묵상집은 비어 있어도 모두 남깁니다.
+  //    관리자 화면은 빈 묵상집에도 글을 써야 하고, 독자 화면은 count 로 걸러 냅니다.
   const collections = [...declared.values()]
     .map((c) => {
       const byDate = entries[c.slug] ?? {};
       const count = Object.values(byDate).reduce((n, byLang) => n + Object.keys(byLang).length, 0);
       return { ...c, count };
     })
-    .filter((c) => c.count > 0 || c.source === "manual")
     .sort((a, b) => (a.order ?? 500) - (b.order ?? 500) || a.slug.localeCompare(b.slug));
 
   const defaultCollection =
