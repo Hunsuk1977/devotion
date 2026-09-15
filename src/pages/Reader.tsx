@@ -47,7 +47,7 @@ export function Reader() {
   const [state, setState] = useState<State>(EMPTY);
 
   useEffect(() => {
-    db.collections().then(setCols);
+    db.readerCollections().then(setCols);
   }, []);
 
   const validLang = !!urlLang && LANGUAGES.some((l) => l.code === urlLang);
