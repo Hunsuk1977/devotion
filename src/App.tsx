@@ -15,7 +15,7 @@ function Home() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const cols = await db.collections();
+      const cols = await db.readerCollections();
       const fallback = await db.defaultCollection();
       const wanted = collection && cols.some((c) => c.slug === collection) ? collection : fallback;
       if (alive) setSlug(wanted || "");
