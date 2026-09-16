@@ -134,19 +134,28 @@ class Budget:
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
-def ask(prompt: str) -> str:
-    """429(할당량)는 몇 번만 기다렸다 재시도하고, 그래도 안 되면 QUOTA 로 알립니다."""
+def ask(prompt: str, budget: Budget) -> str:
+    """일시적 서버 오류와 429를 최대 세 번 시도합니다. 재시도도 예산에 포함합니다."""
     delay = 20
     for attempt in range(3):
+        if not budget.take():
+            raise RuntimeError("BUDGET")
         try:
             resp = client.models.generate_content(model=MODEL, contents=prompt)
             return resp.text or ""
         except Exception as exc:
             text = str(exc)
-            if "RESOURCE_EXHAUSTED" in text or "429" in text:
+            code = str(getattr(exc, "code", ""))
+            quota = code == "429" or "RESOURCE_EXHAUSTED" in text or "429" in text
+            transient = code in {"500", "502", "503", "504"} or bool(
+                re.search(r"\b(500|502|503|504|UNAVAILABLE|INTERNAL|DEADLINE_EXCEEDED)\b", text)
+            ) or isinstance(exc, (TimeoutError, ConnectionError))
+            if quota or transient:
                 if attempt == 2:
-                    raise RuntimeError("QUOTA") from exc
-                print(f"    · 할당량 대기 {delay}초 후 재시도")
+                    if quota:
+                        raise RuntimeError("QUOTA") from exc
+                    raise
+                print(f"    · 일시적 API 오류 — {delay}초 후 재시도")
                 time.sleep(delay)
                 delay *= 2
                 continue
@@ -168,12 +177,14 @@ def paths_for(slug: str, date_str: str) -> tuple[Path, Path]:
 
 def save(slug: str, date_str: str, out: str, translate: bool) -> list[Path]:
     ko_path, en_path = paths_for(slug, date_str)
-    ko_path.parent.mkdir(parents=True, exist_ok=True)
     written = []
     if translate and SPLIT in out:
         ko, en = out.split(SPLIT, 1)
     else:
         ko, en = out, ""
+    if not ko.strip() or (translate and not en.strip()):
+        raise ValueError("묵상 응답이 비어 있거나 영어본이 없습니다.")
+    ko_path.parent.mkdir(parents=True, exist_ok=True)
     ko_path.write_text(clean(ko), encoding="utf-8")
     written.append(ko_path)
     if en.strip():
@@ -183,11 +194,9 @@ def save(slug: str, date_str: str, out: str, translate: bool) -> list[Path]:
 
 
 def process(slug: str, date_str: str, subject: str, body: str, translate: bool, budget: Budget) -> list[Path]:
-    if not budget.take():
-        raise RuntimeError("BUDGET")
     template = PROMPT if translate else ONE_LANG_PROMPT
     prompt = template.format(date=date_str, subject=subject, body=body[:60000], lang=DEFAULT_LANG)
-    return save(slug, date_str, ask(prompt), translate)
+    return save(slug, date_str, ask(prompt, budget), translate)
 
 
 # ------------------------------------------------------------------ #
@@ -256,16 +265,18 @@ def from_email(slug: str, cfg: dict, translate: bool, max_items: int, since_days
         since = (datetime.now(TZ) - timedelta(days=since_days)).strftime("%d-%b-%Y")
         search = f'({search.strip("()")} SINCE {since})' if search != "ALL" else f"(SINCE {since})"
 
-    mail = imaplib.IMAP4_SSL(server)
+    mail = imaplib.IMAP4_SSL(server, timeout=60)
     mail.login(os.environ["EMAIL_USER"], os.environ["EMAIL_PASS"])
     # readonly: 읽음 표시를 남기지 않습니다. 실패해도 메일이 사라지지 않습니다.
-    mail.select(cfg.get("mailbox", "INBOX"), readonly=True)
+    status, _ = mail.select(cfg.get("mailbox", "INBOX"), readonly=True)
+    if status != "OK":
+        mail.logout()
+        raise ValueError(f"IMAP 폴더 선택 실패: {status}")
 
     status, data = mail.search(None, search)
     if status != "OK":
-        print(f"  IMAP 검색 실패: {status}")
         mail.logout()
-        return 0
+        raise ValueError(f"IMAP 검색 실패: {status}")
 
     ids = data[0].split()
     print(f"  검색 {search} → {len(ids)}통")
@@ -382,6 +393,7 @@ def main() -> int:
     ap.add_argument("--max", type=int, default=None, help="묵상집당 최대 편수")
     ap.add_argument("--since-days", type=int, default=None, help="며칠 전까지 훑을지")
     ap.add_argument("--backfill", action="store_true", help="밀린 것 따라잡기 모드")
+    ap.add_argument("--require-today", action="store_true", help="오늘 묵상이 없으면 실패 처리")
     args = ap.parse_args()
 
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
@@ -397,6 +409,8 @@ def main() -> int:
     budget = Budget(BUDGET)
     total = 0
     stopped = False
+    failed = False
+    selected = []
 
     for c in collections:
         slug = c.get("slug")
@@ -405,10 +419,12 @@ def main() -> int:
             continue
         if args.collection and slug != args.collection:
             continue
+        selected.append(c)
         kind = cfg.get("kind")
         fn = SOURCES.get(kind)
         if not fn:
             print(f"'{slug}': 알 수 없는 가져오기 방식 '{kind}' — 건너뜁니다.")
+            failed = True
             continue
 
         print(f"\n▸ {slug} ({kind})")
@@ -425,12 +441,24 @@ def main() -> int:
             break
         except Exception as exc:
             print(f"  · '{slug}' 처리 중 오류: {exc}")
+            failed = True
 
     print(f"\n완료 — {total}편 저장, Gemini 호출 {budget.used}회")
     if stopped and total == 0:
         print("이번 실행에서는 아무것도 저장하지 못했습니다. 내일 다시 시도하거나 백필을 나눠 돌리세요.")
-    # 할당량으로 멈춘 것은 실패가 아닙니다 — 저장한 것은 커밋되어야 합니다.
-    return 0
+    if args.require_today:
+        today = datetime.now(TZ).strftime("%Y-%m-%d")
+        for c in selected:
+            ko, en = paths_for(c["slug"], today)
+            required = [ko, en] if c["importer"].get("translate", True) else [ko]
+            if not all(p.is_file() and p.stat().st_size > 0 for p in required):
+                print(f"  · {c['slug']}: 오늘({today}) 묵상이 없습니다. 다음 예약 실행에서 재확인합니다.")
+                failed = True
+    if not selected:
+        print("가져올 묵상집이 없습니다.")
+        failed = True
+    # 워크플로가 실패 시에도 커밋 단계를 실행하여 부분 결과를 보존합니다.
+    return 1 if failed or stopped else 0
 
 
 if __name__ == "__main__":

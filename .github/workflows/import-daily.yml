@@ -2,7 +2,11 @@ name: 묵상 자동 가져오기 (매일)
 
 on:
   schedule:
-    - cron: '5 11 * * *'
+    # 동부시간 07:05, 서머타임 자동 반영. 뒤의 두 일정은 누락분 복구용입니다.
+    - cron: '5,35 7 * * *'
+      timezone: America/New_York
+    - cron: '5 8 * * *'
+      timezone: America/New_York
   workflow_dispatch:
 
 concurrency:
@@ -26,6 +30,7 @@ jobs:
       - run: pip install google-genai
 
       - name: 가져오기
+        id: import
         env:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
@@ -34,9 +39,11 @@ jobs:
           GEMINI_MODEL: gemini-3.6-flash
           TIMEZONE: America/New_York
           GEMINI_BUDGET: '18'
-        run: python importer.py
+        run: python -u importer.py --collection tozer --require-today
 
       - name: 커밋
+        # 일부를 저장한 뒤 실패했어도 저장된 글은 보존하고 실행은 실패로 남깁니다.
+        if: ${{ !cancelled() && steps.import.outcome != 'skipped' }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

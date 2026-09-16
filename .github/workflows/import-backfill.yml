@@ -46,6 +46,7 @@ jobs:
       - run: pip install google-genai
 
       - name: 백필
+        id: import
         env:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
@@ -66,6 +67,7 @@ jobs:
           python importer.py $ARGS
 
       - name: 커밋
+        if: ${{ !cancelled() && steps.import.outcome != 'skipped' }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -75,5 +77,5 @@ jobs:
             exit 0
           fi
           git commit -m "묵상 백필 ($(TZ=America/New_York date +%Y-%m-%d))"
-          git pull --rebase --autostash origin "${{ env.GITHUB_REF_NAME }}"
-          git push origin "HEAD:${{ env.GITHUB_REF_NAME }}"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
