@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LANGUAGES, t } from "../i18n";
+import { t } from "../i18n";
 import { usePrefs, type Theme } from "../lib/prefs";
 
 const NEXT_THEME: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
@@ -52,13 +52,20 @@ export function Header({ mode }: { mode: "reader" | "admin" }) {
           {t(lang, "appName")}
         </Link>
         <div className="hdr-tools">
-          <div className="seg" role="group" aria-label={t(lang, "language")}>
-            {LANGUAGES.map((l) => (
-              <button key={l.code} type="button" aria-pressed={l.code === lang} onClick={() => switchLang(l.code)}>
-                {l.label}
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            className="icon-btn language-toggle"
+            aria-label={lang === "ko" ? "현재 한국어 — Switch to English" : "Currently English — 한국어로 전환"}
+            title={lang === "ko" ? "English로 전환" : "Switch to 한국어"}
+            onClick={() => switchLang(lang === "ko" ? "en" : "ko")}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <ellipse cx="12" cy="12" rx="4" ry="9" />
+              <path d="M3 12h18" />
+            </svg>
+            <span className="language-flag" aria-hidden="true">{lang === "ko" ? "🇰🇷" : "🇺🇸"}</span>
+          </button>
           <button
             type="button"
             className="icon-btn"
