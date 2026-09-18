@@ -135,9 +135,9 @@ client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
 def ask(prompt: str, budget: Budget) -> str:
-    """일시적 서버 오류와 429를 최대 세 번 시도합니다. 재시도도 예산에 포함합니다."""
-    delay = 20
-    for attempt in range(3):
+    """일시적 서버 오류와 429를 최대 5번 재시도합니다."""
+    delay = 30  # 첫 재시도 대기 시간을 30초로 변경
+    for attempt in range(5):  # 기존 3회에서 5회로 증가
         if not budget.take():
             raise RuntimeError("BUDGET")
         try:
@@ -150,18 +150,18 @@ def ask(prompt: str, budget: Budget) -> str:
             transient = code in {"500", "502", "503", "504"} or bool(
                 re.search(r"\b(500|502|503|504|UNAVAILABLE|INTERNAL|DEADLINE_EXCEEDED)\b", text)
             ) or isinstance(exc, (TimeoutError, ConnectionError))
+            
             if quota or transient:
-                if attempt == 2:
+                if attempt == 4:  # 5번째 시도(index 4)에서도 실패 시
                     if quota:
                         raise RuntimeError("QUOTA") from exc
                     raise
-                print(f"    · 일시적 API 오류 — {delay}초 후 재시도")
+                print(f"    · 일시적 API 오류 — {delay}초 후 재시도 ({attempt + 1}/5)")
                 time.sleep(delay)
-                delay *= 2
+                delay *= 2  # 30초 -> 60초 -> 120초 -> 240초로 대기시간 2배씩 증가
                 continue
             raise
     return ""
-
 
 def clean(md: str) -> str:
     md = md.strip()
