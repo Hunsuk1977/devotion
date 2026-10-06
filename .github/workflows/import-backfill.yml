@@ -53,6 +53,8 @@ jobs:
           IMAP_SERVER: imap.gmail.com
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-3.6-flash
+          CLOUDFLARE_AI_URL: ${{ secrets.CLOUDFLARE_AI_URL }}
+          CLOUDFLARE_AI_SECRET: ${{ secrets.CLOUDFLARE_AI_SECRET }}
           TIMEZONE: America/New_York
           GEMINI_BUDGET: ${{ inputs.budget }}
         run: |

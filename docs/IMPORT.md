@@ -109,6 +109,13 @@ Settings → Secrets and variables → Actions 에 세 개가 필요합니다.
 | `EMAIL_USER` | Gmail 주소 |
 | `EMAIL_PASS` | Gmail **앱 비밀번호** 16자리 (일반 비밀번호 아님, 2단계 인증 필요) |
 | `GEMINI_API_KEY` | Google AI Studio 키 |
+| `CLOUDFLARE_AI_URL` | Cloudflare Workers AI 보조 번역 Worker 주소 |
+| `CLOUDFLARE_AI_SECRET` | Worker 호출을 보호하는 공유 비밀값 |
+
+Gemini가 일시적인 429/503 오류를 반환하면 Cloudflare Workers AI로 자동 전환합니다.
+Cloudflare도 실패하면 Gemini를 두 번 더 시도합니다. Worker 코드는
+`cloudflare-worker/`에 있으며 `IMPORT_SECRET`에는 GitHub의
+`CLOUDFLARE_AI_SECRET`과 같은 값을 저장합니다.
 
 ## 출력 형식
 

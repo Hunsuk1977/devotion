@@ -27,6 +27,8 @@ import os
 import re
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from email.header import decode_header, make_header
 from pathlib import Path
@@ -41,6 +43,8 @@ CONFIG = ROOT / "collections.json"
 DEFAULT_LANG = os.environ.get("DEFAULT_LANG", "ko")
 TZ = ZoneInfo(os.environ.get("TIMEZONE", "America/New_York"))
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+CLOUDFLARE_AI_URL = os.environ.get("CLOUDFLARE_AI_URL", "").strip()
+CLOUDFLARE_AI_SECRET = os.environ.get("CLOUDFLARE_AI_SECRET", "").strip()
 
 # 무료 등급 하루 20회. 재시도 여유를 두고 조금 낮게 잡습니다.
 BUDGET = int(os.environ.get("GEMINI_BUDGET", "18"))
@@ -131,13 +135,63 @@ class Budget:
         return True
 
 
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+
+
+def ask_cloudflare(prompt: str) -> str:
+    """Cloudflare Worker의 Workers AI로 묵상을 정리합니다."""
+    if not CLOUDFLARE_AI_URL or not CLOUDFLARE_AI_SECRET:
+        raise RuntimeError("Cloudflare AI 설정이 없습니다.")
+    payload = json.dumps({"prompt": prompt}).encode("utf-8")
+    request = urllib.request.Request(
+        CLOUDFLARE_AI_URL,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {CLOUDFLARE_AI_SECRET}",
+            "Content-Type": "application/json",
+            "User-Agent": "devotion-importer/1.0",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=120) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    text = result.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("Cloudflare AI 응답이 비어 있습니다.")
+    return text
 
 
 def ask(prompt: str, budget: Budget) -> str:
-    """일시적 서버 오류와 429를 최대 5번 재시도합니다."""
-    delay = 30  # 첫 재시도 대기 시간을 30초로 변경
-    for attempt in range(5):  # 기존 3회에서 5회로 증가
+    """Gemini를 한 번 시도하고 실패하면 Cloudflare Workers AI로 전환합니다."""
+    if not budget.take():
+        raise RuntimeError("BUDGET")
+    try:
+        resp = client.models.generate_content(model=MODEL, contents=prompt)
+        if resp.text:
+            return resp.text
+    except Exception as exc:
+        error_text = str(exc)
+        error_code = str(getattr(exc, "code", ""))
+        retryable = error_code in {"429", "500", "502", "503", "504"} or bool(
+            re.search(r"\b(429|500|502|503|504|RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL|DEADLINE_EXCEEDED)\b", error_text)
+        ) or isinstance(exc, (TimeoutError, ConnectionError))
+        if not retryable and not (CLOUDFLARE_AI_URL and CLOUDFLARE_AI_SECRET):
+            raise
+        print(f"    · Gemini 실패 — Cloudflare Workers AI로 전환: {exc}")
+
+    if CLOUDFLARE_AI_URL and CLOUDFLARE_AI_SECRET:
+        for attempt, delay in enumerate((0, 10), start=1):
+            if delay:
+                print(f"    · Cloudflare AI 재시도 — {delay}초 대기")
+                time.sleep(delay)
+            try:
+                return ask_cloudflare(prompt)
+            except Exception as exc:
+                if attempt == 2:
+                    print(f"    · Cloudflare AI 실패 — Gemini 재시도: {exc}")
+
+    delay = 30
+    for attempt in range(2):
         if not budget.take():
             raise RuntimeError("BUDGET")
         try:
@@ -152,13 +206,12 @@ def ask(prompt: str, budget: Budget) -> str:
             ) or isinstance(exc, (TimeoutError, ConnectionError))
             
             if quota or transient:
-                if attempt == 4:  # 5번째 시도(index 4)에서도 실패 시
+                if attempt == 1:
                     if quota:
                         raise RuntimeError("QUOTA") from exc
                     raise
-                print(f"    · 일시적 API 오류 — {delay}초 후 재시도 ({attempt + 1}/5)")
+                print(f"    · Gemini 일시적 오류 — {delay}초 후 마지막 재시도")
                 time.sleep(delay)
-                delay *= 2  # 30초 -> 60초 -> 120초 -> 240초로 대기시간 2배씩 증가
                 continue
             raise
     return ""

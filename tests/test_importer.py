@@ -25,21 +25,34 @@ class ImporterTests(unittest.TestCase):
         self.content.start()
         self.addCleanup(self.content.stop)
 
-    def test_transient_error_recovers_and_counts_attempts(self):
+    def test_transient_error_falls_back_to_cloudflare(self):
         budget = importer.Budget(3)
-        with patch.object(importer.client.models, "generate_content", side_effect=[
-            Exception("503 UNAVAILABLE"), types.SimpleNamespace(text="result")
-        ]) as call, patch.object(importer.time, "sleep") as sleep:
+        with patch.object(importer.client.models, "generate_content", side_effect=Exception("503 UNAVAILABLE")) as gemini, \
+             patch.object(importer, "CLOUDFLARE_AI_URL", "https://worker.example"), \
+             patch.object(importer, "CLOUDFLARE_AI_SECRET", "secret"), \
+             patch.object(importer, "ask_cloudflare", return_value="result") as cloudflare:
             self.assertEqual(importer.ask("prompt", budget), "result")
-        self.assertEqual(call.call_count, 2)
-        self.assertEqual(budget.used, 2)
-        sleep.assert_called_once_with(20)
+        gemini.assert_called_once()
+        cloudflare.assert_called_once_with("prompt")
+        self.assertEqual(budget.used, 1)
 
-    def test_persistent_error_stops_after_three_attempts(self):
+    def test_persistent_error_stops_after_three_gemini_attempts(self):
         with patch.object(importer.client.models, "generate_content", side_effect=Exception("503 UNAVAILABLE")) as call, patch.object(importer.time, "sleep"):
             with self.assertRaisesRegex(Exception, "503"):
                 importer.ask("prompt", importer.Budget(18))
         self.assertEqual(call.call_count, 3)
+
+    def test_cloudflare_retries_once_then_returns_to_gemini(self):
+        with patch.object(importer.client.models, "generate_content", side_effect=[
+            Exception("503 UNAVAILABLE"), types.SimpleNamespace(text="gemini result")
+        ]) as gemini, patch.object(importer, "CLOUDFLARE_AI_URL", "https://worker.example"), \
+             patch.object(importer, "CLOUDFLARE_AI_SECRET", "secret"), \
+             patch.object(importer, "ask_cloudflare", side_effect=Exception("503")) as cloudflare, \
+             patch.object(importer.time, "sleep") as sleep:
+            self.assertEqual(importer.ask("prompt", importer.Budget(4)), "gemini result")
+        self.assertEqual(cloudflare.call_count, 2)
+        self.assertEqual(gemini.call_count, 2)
+        sleep.assert_called_once_with(10)
 
     def test_budget_limits_retries(self):
         with patch.object(importer.client.models, "generate_content", side_effect=Exception("503 UNAVAILABLE")) as call, patch.object(importer.time, "sleep"):
